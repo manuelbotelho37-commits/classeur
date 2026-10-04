@@ -161,7 +161,8 @@ const decBytes = (k, r) => crypto.subtle.decrypt({name:'AES-GCM', iv:r.iv}, k, r
 
 /* ---------- état ---------- */
 let key = null, data = null, keepExp = 0, idleT = null;
-let view = {tab:'all', sub:null, q:'', open:null, inboxOpen:null};
+let view = {tab:null, sub:null, q:'', open:null, inboxOpen:null};
+function defaultTab(){ const t = data && topTabs()[0]; return t ? t.id : 'inbox'; }
 let urls = [];
 let tabMap = {}, kids = {}, topOf = {};
 
@@ -188,7 +189,7 @@ async function boot(){
   if(keep && keep.exp > Date.now()){
     try{
       key = await crypto.subtle.importKey('raw', keep.raw, 'AES-GCM', true, ['encrypt','decrypt']);
-      keepExp = keep.exp; await loadData(); return renderMain();
+      keepExp = keep.exp; await loadData(); await gLoadToken(); return renderMain();
     }catch(e){ key = null; }
   }
   renderLock('');
@@ -250,12 +251,13 @@ async function tryUnlock(code){
   }
   key = k; await mset('fails', {n:0, until:0});
   try{ await loadData(); }catch(e){ data = {tabs:[], mails:[], importedAt:0}; prepare(); }
+  await gLoadToken();
   resetIdle(); renderMain();
 }
 async function lockNow(){
   key = null; data = null; keepExp = 0; gToken = null; inboxRows = []; inboxLoaded = false; inboxSel.clear();
-  await mdel('keep');
-  view = {tab:'all', sub:null, q:'', open:null, inboxOpen:null}; closeModal(); renderLock('');
+  await mdel('keep'); await mdel('gtok');
+  view = {tab:null, sub:null, q:'', open:null, inboxOpen:null}; closeModal(); renderLock('');
 }
 
 /* ---------- préparation des données ---------- */
@@ -300,18 +302,30 @@ function loadGsi(){
     const iv = setInterval(()=>{ if(gsiReady()){ clearInterval(iv); res(); } else if(Date.now()-t0 > 10000){ clearInterval(iv); rej(new Error('timeout')); } }, 150);
   });
 }
+async function gSaveToken(){
+  try{ const e = await encBytes(key, enc.encode(JSON.stringify({t:gToken, e:gTokenExp}))); await mset('gtok', e); }catch(e){}
+}
+async function gLoadToken(){
+  try{
+    const r = await mget('gtok'); if(!r) return;
+    const o = JSON.parse(dec.decode(await decBytes(key, r)));
+    if(o && o.t && o.e > Date.now() + 120000){ gToken = o.t; gTokenExp = o.e; } else await mdel('gtok');
+  }catch(e){}
+}
 async function gConnect(){
   try{
     await loadGsi();
+    const hint = (await mget('ghint')) || undefined;
     await new Promise((res,rej)=>{
       const client = google.accounts.oauth2.initTokenClient({
-        client_id: CLIENT_ID, scope: SCOPE,
+        client_id: CLIENT_ID, scope: SCOPE, hint: hint,
         callback: r=>{ if(r && r.access_token){ gToken = r.access_token; gTokenExp = Date.now() + ((+r.expires_in||3600) - 60)*1000; res(); } else rej(new Error((r && r.error) || 'refus')); },
         error_callback: e=>rej(new Error((e && e.type) || 'popup'))
       });
       client.requestAccessToken({prompt:''});
     });
-    toast('Connecté à Gmail ✓');
+    gSaveToken();
+    if(!(await mget('ghint'))){ try{ const pr = await gapi('profile'); if(pr && pr.emailAddress) await mset('ghint', pr.emailAddress); }catch(e){} }
     return true;
   }catch(e){
     toast(navigator.onLine ? 'Connexion à Gmail impossible. Réessaie.' : 'Pas d\'internet');
@@ -369,7 +383,7 @@ async function loadInbox(more){
   inboxLoading = false; renderTop(); renderBody();
 }
 function setScope(s){ if(inboxScope === s) return; inboxScope = s; inboxRows = []; inboxLoaded = false; inboxNext = null; inboxSel.clear(); renderTop(); renderBody(); if(gToken) loadInbox(false); }
-function refreshInbox(){ inboxSel.clear(); inboxNext = null; if(!gToken){ connectAndLoad(); } else loadInbox(false); }
+function refreshInbox(){ inboxSel.clear(); inboxNext = null; if(gToken && Date.now() > gTokenExp) gToken = null; if(!gToken){ connectAndLoad(); } else loadInbox(false); }
 async function connectAndLoad(){ if(await gConnect()){ inboxRows = []; inboxLoaded = false; inboxNext = null; loadInbox(false); } else renderBody(); }
 function toggleSel(id){ if(inboxSel.has(id)) inboxSel.delete(id); else inboxSel.add(id); renderBody(); }
 function selectAllInbox(){ if(inboxSel.size === inboxRows.length) inboxSel.clear(); else inboxRows.forEach(r=>inboxSel.add(r.id)); renderBody(); }
@@ -557,7 +571,7 @@ function confirmDelTab(id){
   openModal(`<h3>Supprimer l'onglet ?</h3><p>L'onglet « ${esc(t.name)} » est vide. Il sera supprimé.</p><div class="btns"><button onclick="showTabs()">Annuler</button><button class="danger" onclick="doDelTab('${id}')">Supprimer</button></div>`);
 }
 async function doDelTab(id){
-  data.tabs = data.tabs.filter(t=>t.id !== id); if(view.tab === id){ view.tab = 'all'; view.sub = null; }
+  data.tabs = data.tabs.filter(t=>t.id !== id); if(view.tab === id){ view.tab = null; view.sub = null; }
   prepare(); await saveData(); showTabs(); renderTop(); renderBody();
 }
 
@@ -569,6 +583,7 @@ function topBar(left, title){
 }
 function renderMain(){
   revokeUrls();
+  if(!view.tab || (view.tab !== 'inbox' && !tabMap[view.tab])) view.tab = defaultTab();
   if(view.inboxOpen) return renderInboxDetail();
   if(view.open) return renderDetail();
   $('#app').innerHTML = `<div class="wrap">${topBar('<img class="logo" src="icon-192.png" alt="">', 'Classeur de mails')}<div id="topchips"></div><div id="body"></div></div><div id="selbar"></div>`;
@@ -578,41 +593,45 @@ function renderTop(){
   const el = $('#topchips'); if(!el) return;
   const counts = {}; data.mails.forEach(m=>{ counts[m._top] = (counts[m._top]||0) + 1; });
   const inboxLabel = '📥 À classer' + (inboxLoaded ? ' (' + inboxRows.length + (inboxNext?'+':'') + ')' : '');
-  const chips = [`<button class="chip ${view.tab==='inbox'?'on':''}" onclick="setTab('inbox')">${inboxLabel}</button>`,
-    `<button class="chip ${view.tab==='all'?'on':''}" onclick="setTab('all')">Tous (${data.mails.length})</button>`]
+  const chips = [`<button class="chip ${view.tab==='inbox'?'on':''}" onclick="setTab('inbox')">${inboxLabel}</button>`]
     .concat(topTabs().map(t=>`<button class="chip ${view.tab===t.id?'on':''}" onclick="setTab('${t.id}')"><span class="dot" style="background:${esc(t.color||'#999')}"></span>${esc(t.name)} (${counts[t.id]||0})</button>`)).join('')
     + '<button class="chip" onclick="showTabs()" aria-label="Gérer les onglets">⋯</button>';
   let subs = '';
-  if(view.tab !== 'inbox' && view.tab !== 'all' && kids[view.tab]){
+  if(view.tab !== 'inbox' && kids[view.tab]){
     const own = {}; data.mails.forEach(m=>{ own[m.tabId] = (own[m.tabId]||0) + 1; });
     subs = '<div class="chips">'+childTabs(view.tab).map(c=>`<button class="chip sub ${view.sub===c.id?'on':''}" onclick="setSub('${c.id}')">${esc(c.name)} (${own[c.id]||0})</button>`).join('')+'</div>';
   }
-  const search = (view.tab === 'inbox') ? '' : `<div style="margin-top:12px"><input class="txt" id="q" type="search" placeholder="Rechercher dans les mails…" value="${esc(view.q)}"></div>`;
+  const search = `<div style="margin-top:12px"><input class="txt" id="q" type="search" placeholder="Rechercher dans tous les mails rangés…" value="${esc(view.q)}"></div>`;
   el.innerHTML = search + `<div class="chips">${chips}</div>${subs}`;
   const q = $('#q'); if(q) q.addEventListener('input', e=>{ view.q = e.target.value; renderBody(); });
 }
 function renderBody(){
   const el = $('#body'); if(!el) return;
   const sb = $('#selbar'); if(sb) sb.innerHTML = selBarHtml();
-  if(view.tab === 'inbox'){ el.innerHTML = inboxHtml(); return; }
   const q = view.q.trim().toLowerCase();
+  if(view.tab === 'inbox' && !q){ el.innerHTML = inboxHtml(); return; }
   const ms = data.mails.filter(m=>{
-    if(view.tab !== 'all' && m._top !== view.tab) return false;
+    if(q) return m._s.indexOf(q) >= 0;
+    if(m._top !== view.tab) return false;
     if(view.sub && m.tabId !== view.sub) return false;
-    return !q || m._s.indexOf(q) >= 0;
+    return true;
   });
   if(!data.mails.length){ el.innerHTML = '<div class="empty">Aucun mail rangé pour l\'instant.<br>Touche « 📥 À classer » pour trier ta boîte Gmail.</div>'; return; }
-  if(!ms.length){ el.innerHTML = '<div class="empty">Aucun mail trouvé.</div>'; return; }
+  if(!ms.length){ el.innerHTML = '<div class="empty">' + (q ? 'Aucun mail trouvé.' : 'Aucun mail dans cet onglet.') + '</div>'; return; }
   el.innerHTML = ms.map(m=>{
     const nAtt = Math.max((m.files||[]).length, (m.attachments||[]).length);
-    const tn = (view.tab === 'all' && tabMap[m.tabId]) ? `<span class="tag">${esc(tabMap[m.tabId].name)}</span>` : '';
+    const tn = ((q || view.tab === 'all') && tabMap[m.tabId]) ? `<span class="tag">${esc(tabMap[m.tabId].name)}</span>` : '';
     return `<button class="card" onclick="openMail('${esc(m.id)}')"><div class="t">${esc(m.customTitle || m.subject || '(sans objet)')}</div>
       <div class="m"><span>${esc(m.date||'')}</span><span>${esc(m.from||'')}</span>${nAtt?`<span>📎 ${nAtt}</span>`:''}${tn}</div></button>`;
   }).join('');
 }
 function setTab(id){
   view.tab = id; view.sub = null; if(id !== 'inbox') inboxSel.clear(); renderTop(); renderBody();
-  if(id === 'inbox' && !inboxLoaded && !inboxLoading && gToken) loadInbox(false);
+  if(id === 'inbox'){
+    if(gToken && Date.now() > gTokenExp) gToken = null;
+    if(!gToken){ if(navigator.onLine) connectAndLoad(); }
+    else if(!inboxLoaded && !inboxLoading) loadInbox(false);
+  }
 }
 function setSub(id){ view.sub = (view.sub === id) ? null : id; renderTop(); renderBody(); }
 
@@ -735,7 +754,7 @@ function showSettings(){
     <div class="btns"><button onclick="closeModal()">Fermer</button></div>`);
 }
 function gDisconnect(){
-  const t = gToken; gToken = null; inboxRows = []; inboxLoaded = false; inboxSel.clear();
+  const t = gToken; mdel('gtok'); gToken = null; inboxRows = []; inboxLoaded = false; inboxSel.clear();
   try{ if(t && gsiReady()) google.accounts.oauth2.revoke(t, ()=>{}); }catch(e){}
   closeModal(); renderTop(); renderBody(); toast('Déconnecté de Gmail');
 }
@@ -783,7 +802,7 @@ async function doImport(file){
     }
     data = {tabs:j.tabs, mails:j.mails, importedAt:Date.now()};
     prepare(); await saveData();
-    view = {tab:'all', sub:null, q:'', open:null, inboxOpen:null};
+    view = {tab:null, sub:null, q:'', open:null, inboxOpen:null};
     busy = false; closeModal(); renderMain(); toast(data.mails.length + ' mails importés');
   }catch(e){
     busy = false;
