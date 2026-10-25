@@ -182,6 +182,7 @@ let busy = false;
 
 /* ---------- démarrage ---------- */
 async function boot(){
+  try{ if(navigator.storage && navigator.storage.persist) navigator.storage.persist(); }catch(e){}
   preloadGsi();
   const auth = await mget('auth');
   if(!auth) return renderSetup();
@@ -189,7 +190,7 @@ async function boot(){
   if(keep && keep.exp > Date.now()){
     try{
       key = await crypto.subtle.importKey('raw', keep.raw, 'AES-GCM', true, ['encrypt','decrypt']);
-      keepExp = keep.exp; await loadData(); await gLoadToken(); return renderMain();
+      keepExp = keep.exp; await loadData(); await gLoadToken(); if(gToken) runPendingBackup(); return renderMain();
     }catch(e){ key = null; }
   }
   renderLock('');
@@ -200,10 +201,13 @@ async function loadData(){
   if(!data.tabs) data.tabs = []; if(!data.mails) data.mails = [];
   prepare();
 }
+let dataBroken = false;
 async function saveData(){
+  if(dataBroken){ toast('Lecture impossible : rien n\'a été écrasé'); return; }
   const clean = {tabs:data.tabs, importedAt:data.importedAt||0, mails:data.mails.map(m=>{ const c = Object.assign({}, m); delete c._ts; delete c._top; delete c._s; return c; })};
   const e = await encBytes(key, enc.encode(JSON.stringify(clean)));
   await mset('data', e);
+  scheduleAutoBackup();
 }
 
 /* ---------- écrans code ---------- */
@@ -250,8 +254,9 @@ async function tryUnlock(code){
     await mset('fails', f); return renderLock('Code incorrect.');
   }
   key = k; await mset('fails', {n:0, until:0});
-  try{ await loadData(); }catch(e){ data = {tabs:[], mails:[], importedAt:0}; prepare(); }
+  try{ await loadData(); dataBroken = false; }catch(e){ dataBroken = true; data = {tabs:[], mails:[], importedAt:0}; prepare(); }
   await gLoadToken();
+  if(gToken) runPendingBackup();
   resetIdle(); renderMain();
 }
 async function lockNow(){
@@ -326,6 +331,7 @@ async function gConnect(){
     });
     gSaveToken();
     if(!(await mget('ghint'))){ try{ const pr = await gapi('profile'); if(pr && pr.emailAddress) await mset('ghint', pr.emailAddress); }catch(e){} }
+    runPendingBackup();
     return true;
   }catch(e){
     toast(navigator.onLine ? 'Connexion à Gmail impossible. Réessaie.' : 'Pas d\'internet');
@@ -454,7 +460,7 @@ function renderInboxDetail(){
       ${nAtt ? '<div class="sec">Pièces jointes ('+nAtt+')</div>'+m.atts.map(a=>`<div class="att"><div class="th">${/^image\//.test(a.contentType)?'🖼️':/pdf/.test(a.contentType)?'📕':'📄'}</div><div class="nm">${esc(a.filename)}</div></div>`).join('') : ''}
       <div class="sec">Mail</div><div class="mailbox">${m.html ? '<iframe id="mf" sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"></iframe>' : '<pre>'+esc(m.plain || '(mail vide)')+'</pre>'}</div>
       <div class="btns"><button class="big" onclick="pickTabFor(['${esc(m.id)}'])">Ranger dans…</button><button class="danger" onclick="confirmTrash(['${esc(m.id)}'])">Corbeille</button></div>
-      <p style="color:var(--dim);font-size:.8rem;margin-top:10px">« Ranger » enregistre le mail dans l'appli puis le retire de ta boîte de réception.</p>`;
+      <p style="color:var(--dim);font-size:.8rem;margin-top:10px">« Ranger » enregistre le mail dans l'appli et le retire de ta boîte de réception. L'original reste gardé dans Gmail (libellé « Classeur »).</p>`;
   }
   $('#app').innerHTML = `<div class="wrap">${bar}${body}</div>`;
   if(m && m.html) mountFrame($('#mf'), m.html);
@@ -512,7 +518,19 @@ async function fileOne(gid, tabId){
     savedAt:Date.now(), viewUrl:'https://mail.google.com/mail/u/0/#all/' + gid};
   data.mails = data.mails.filter(m=>m.gmailId !== gid); data.mails.push(mail);
   prepare(); await saveData();
-  await gapi('messages/' + gid + '/trash', {method:'POST'});
+  /* l'original est archivé (gardé dans Gmail, hors de la boîte de réception) au lieu d'aller à la corbeille */
+  const add = [];
+  try{ const lid = await ensureLabel('Classeur'); if(lid) add.push(lid); }catch(e){}
+  await gapi('messages/' + gid + '/modify', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({addLabelIds:add, removeLabelIds:['INBOX']})});
+}
+const labelIds = {};
+async function ensureLabel(name){
+  if(labelIds[name]) return labelIds[name];
+  const l = await gapi('labels');
+  const f = ((l && l.labels) || []).find(x=>String(x.name).toLowerCase() === name.toLowerCase());
+  if(f){ labelIds[name] = f.id; return f.id; }
+  const c = await gapi('labels', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name, labelListVisibility:'labelShow', messageListVisibility:'show'})});
+  labelIds[name] = c && c.id; return labelIds[name];
 }
 function confirmTrash(ids){
   pendingIds = ids;
@@ -616,7 +634,7 @@ function renderBody(){
     if(view.sub && m.tabId !== view.sub) return false;
     return true;
   });
-  if(!data.mails.length){ el.innerHTML = '<div class="empty">Aucun mail rangé pour l\'instant.<br>Touche « 📥 À classer » pour trier ta boîte Gmail.</div>'; return; }
+  if(!data.mails.length){ el.innerHTML = '<div class="empty">Aucun mail rangé pour l\'instant.<br>Touche « 📥 À classer » pour trier ta boîte Gmail.<br><br><button onclick="confirmRestoreGmail()">Récupérer ma sauvegarde Gmail</button></div>'; return; }
   if(!ms.length){ el.innerHTML = '<div class="empty">' + (q ? 'Aucun mail trouvé.' : 'Aucun mail dans cet onglet.') + '</div>'; return; }
   el.innerHTML = ms.map(m=>{
     const nAtt = Math.max((m.files||[]).length, (m.attachments||[]).length);
@@ -739,10 +757,14 @@ async function delMail(id){
 
 /* ---------- réglages, sauvegarde, import ---------- */
 function fmtExp(t){ return new Date(t).toLocaleString('fr-FR', {weekday:'long', hour:'2-digit', minute:'2-digit'}); }
-function showSettings(){
+async function showSettings(){
   const n = data ? data.mails.length : 0;
   const when = data && data.importedAt ? new Date(data.importedAt).toLocaleDateString('fr-FR') : '';
+  let bkLast = 0, bkPend = false; try{ bkLast = (await mget('bkLast')) || 0; bkPend = !!(await mget('bkPending')); }catch(e){}
+  const bkTxt = bkLast ? 'Dernière : ' + new Date(bkLast).toLocaleString('fr-FR', {day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit'}) + (bkPend ? ' · une nouvelle est en attente de connexion à Gmail.' : ' ✓') : (bkPend ? 'En attente : elle se fera dès que Gmail sera connecté.' : 'Pas encore faite.');
   openModal(`<h3>Réglages</h3>
+    <div class="row"><div><b>Sauvegarde automatique dans Gmail</b><small>Après chaque changement, tout est copié dans ton Gmail (libellé « ${BK_LABEL} »). ${esc(bkTxt)}</small></div></div>
+    <div class="row"><div><b>Restaurer depuis Gmail</b><small>Remet les onglets et les mails de la dernière sauvegarde automatique.</small></div><button onclick="confirmRestoreGmail()">Restaurer</button></div>
     <div class="row"><div><b>Rester déverrouillé 24 h</b><small>${keepExp > Date.now() ? 'Actif jusqu\'à '+esc(fmtExp(keepExp))+'. Le code n\'est pas demandé : quiconque a ton téléphone peut ouvrir l\'appli.' : 'Le code est demandé à chaque ouverture.'}</small></div>
       <button class="sw ${keepExp > Date.now() ? 'on' : ''}" onclick="toggleKeep()" aria-label="Rester déverrouillé 24 h"></button></div>
     <div class="row"><div><b>Gmail</b><small>${gToken ? 'Connecté.' : 'Non connecté (connexion à chaque ouverture).'}</small></div>
@@ -763,16 +785,19 @@ async function toggleKeep(){
   else { const raw = await crypto.subtle.exportKey('raw', key); keepExp = Date.now() + 864e5; await mset('keep', {raw, exp:keepExp}); toast('Déverrouillé pendant 24 h'); }
   showSettings();
 }
+async function buildBackup(withFiles){
+  const files = [];
+  if(withFiles){ for(const m of data.mails){ for(const f of (m.files||[])){
+    const r = await bget(f.id); if(!r) continue;
+    files.push({id:f.id, filename:f.filename, contentType:f.contentType, b64:bytesToB64(await decBytes(key, r))});
+  } } }
+  const clean = data.mails.map(m=>{ const c = Object.assign({}, m); delete c._ts; delete c._top; delete c._s; return c; });
+  return {version:1, exportedAt:Date.now(), tabs:data.tabs, mails:clean, files};
+}
 async function exportBackup(){
   busy = true; openModal('<h3>Sauvegarde…</h3><p>Préparation du fichier. Ne ferme pas l\'appli.</p>');
   try{
-    const files = [];
-    for(const m of data.mails){ for(const f of (m.files||[])){
-      const r = await bget(f.id); if(!r) continue;
-      files.push({id:f.id, filename:f.filename, contentType:f.contentType, b64:bytesToB64(await decBytes(key, r))});
-    } }
-    const clean = data.mails.map(m=>{ const c = Object.assign({}, m); delete c._ts; delete c._top; delete c._s; return c; });
-    const blob = new Blob([JSON.stringify({version:1, exportedAt:Date.now(), tabs:data.tabs, mails:clean, files})], {type:'application/json'});
+    const blob = new Blob([JSON.stringify(await buildBackup(true))], {type:'application/json'});
     const u = URL.createObjectURL(blob); const a = document.createElement('a'); const d = new Date();
     a.href = u; a.download = 'classeur-sauvegarde-' + d.getFullYear() + String(d.getMonth()+1).padStart(2,'0') + String(d.getDate()).padStart(2,'0') + '.json';
     document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(u), 20000);
@@ -794,20 +819,106 @@ async function doImport(file){
   busy = true; openModal('<h3>Import en cours…</h3><p>Ne ferme pas l\'appli.</p>');
   try{
     const j = JSON.parse(await file.text());
-    if(!j || !Array.isArray(j.mails) || !Array.isArray(j.tabs)) throw new Error('format');
-    await bclear();
-    for(const f of (j.files || [])){
-      const e = await encBytes(key, b64dec(f.b64).buffer);
-      await bset(f.id, {iv:e.iv, ct:e.ct, type:f.contentType, name:f.filename});
-    }
-    data = {tabs:j.tabs, mails:j.mails, importedAt:Date.now()};
-    prepare(); await saveData();
-    view = {tab:null, sub:null, q:'', open:null, inboxOpen:null};
+    await importObject(j);
     busy = false; closeModal(); renderMain(); toast(data.mails.length + ' mails importés');
   }catch(e){
     busy = false;
     openModal('<h3>Import impossible</h3><p>Ce fichier n\'est pas le bon. Choisis un fichier de sauvegarde du classeur.</p><div class="btns"><button onclick="closeModal()">Fermer</button></div>');
   }
+}
+async function importObject(j){
+  if(!j || !Array.isArray(j.mails) || !Array.isArray(j.tabs)) throw new Error('format');
+  const keepFiles = !(j.files && j.files.length);   /* sauvegarde sans pièces jointes : on garde celles déjà présentes */
+  if(!keepFiles) await bclear();
+  for(const f of (j.files || [])){
+    const e = await encBytes(key, b64dec(f.b64).buffer);
+    await bset(f.id, {iv:e.iv, ct:e.ct, type:f.contentType, name:f.filename});
+  }
+  dataBroken = false;
+  data = {tabs:j.tabs, mails:j.mails, importedAt:Date.now()};
+  prepare(); await saveData();
+  view = {tab:null, sub:null, q:'', open:null, inboxOpen:null};
+}
+
+/* ---------- sauvegarde automatique dans Gmail ---------- */
+const BK_LABEL = 'Classeur sauvegarde';
+const BK_MAX = 30 * 1024 * 1024;
+let bkTimer = null, bkRunning = false;
+function scheduleAutoBackup(){
+  mset('bkPending', true).catch(()=>{});
+  clearTimeout(bkTimer);
+  bkTimer = setTimeout(runPendingBackup, 15000);
+}
+async function runPendingBackup(){
+  if(bkRunning || !key || !data || dataBroken) return;
+  if(!(await mget('bkPending'))) return;
+  if(!gToken || Date.now() > gTokenExp || !navigator.onLine) return;   /* refait au prochain branchement à Gmail */
+  bkRunning = true;
+  try{
+    await backupToGmail();
+    await mset('bkPending', false); await mset('bkLast', Date.now());
+  }catch(e){}
+  bkRunning = false;
+}
+function b64Lines(s){ return s.replace(/.{1,76}/g, '$&\r\n'); }
+function utf8B64(s){ return bytesToB64(enc.encode(s)); }
+async function backupToGmail(){
+  let obj = await buildBackup(true);
+  let json = JSON.stringify(obj);
+  if(json.length * 1.37 > BK_MAX){ obj = await buildBackup(false); json = JSON.stringify(obj); }
+  const d = new Date(), stamp = d.toLocaleString('fr-FR', {timeZone:'Europe/Paris'});
+  const me = (await mget('ghint')) || '';
+  const bd = 'classeur' + Date.now();
+  const fname = 'classeur-sauvegarde-' + d.getFullYear() + String(d.getMonth()+1).padStart(2,'0') + String(d.getDate()).padStart(2,'0') + '.json';
+  const subject = 'NE PAS SUPPRIMER - Sauvegarde Classeur de mails (' + stamp + ')';
+  const mime = (me ? 'From: ' + me + '\r\nTo: ' + me + '\r\n' : '') +
+    'Subject: =?UTF-8?B?' + utf8B64(subject) + '?=\r\nDate: ' + d.toUTCString() + '\r\nMIME-Version: 1.0\r\n' +
+    'Content-Type: multipart/mixed; boundary="' + bd + '"\r\n\r\n' +
+    '--' + bd + '\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n' +
+    b64Lines(utf8B64('Sauvegarde automatique de ton Classeur de mails : ' + obj.tabs.length + ' onglets, ' + obj.mails.length + ' mails.\nNe supprime pas ce message : il sert à tout récupérer si l\'appli est effacée.')) +
+    '--' + bd + '\r\nContent-Type: application/json; name="' + fname + '"\r\nContent-Disposition: attachment; filename="' + fname + '"\r\nContent-Transfer-Encoding: base64\r\n\r\n' +
+    b64Lines(utf8B64(json)) + '--' + bd + '--\r\n';
+  const lid = await ensureLabel(BK_LABEL);
+  if(!gToken) throw {code:'auth'};
+  const r = await fetch('https://gmail.googleapis.com/upload/gmail/v1/users/me/messages?uploadType=media&internalDateSource=dateHeader', {method:'POST', headers:{Authorization:'Bearer ' + gToken, 'Content-Type':'message/rfc822'}, body:mime});
+  if(!r.ok) throw {code:'http', status:r.status};
+  const ins = await r.json();
+  await gapi('messages/' + ins.id + '/modify', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({addLabelIds:[lid], removeLabelIds:['INBOX','UNREAD']})});
+  /* on garde les 5 dernières sauvegardes, les plus anciennes vont à la corbeille */
+  try{
+    const l = await gapi('messages?maxResults=50&labelIds=' + encodeURIComponent(lid));
+    const old = ((l && l.messages) || []).slice(5);
+    for(const m of old){ try{ await gapi('messages/' + m.id + '/trash', {method:'POST'}); }catch(e){} }
+  }catch(e){}
+}
+async function restoreFromGmail(){
+  if(!gToken || Date.now() > gTokenExp){ if(!(await gConnect())) return; }
+  busy = true; openModal('<h3>Recherche de la sauvegarde…</h3><p>Ne ferme pas l\'appli.</p>');
+  try{
+    const lid = await ensureLabel(BK_LABEL);
+    const l = await gapi('messages?maxResults=1&labelIds=' + encodeURIComponent(lid));
+    const first = l && l.messages && l.messages[0];
+    if(!first) throw {code:'none'};
+    const msg = await gapi('messages/' + first.id + '?format=full');
+    const p = parseMessage(msg);
+    const a = p.atts.find(x=>/json/.test(x.contentType) || /\.json$/i.test(x.filename||''));
+    if(!a) throw {code:'none'};
+    let b64u = a.data;
+    if(!b64u && a.attachmentId){ const r = await gapi('messages/' + first.id + '/attachments/' + a.attachmentId); b64u = r && r.data; }
+    const j = JSON.parse(dec.decode(b64urlToBytes(b64u)));
+    openModal('<h3>Restauration…</h3><p>' + j.mails.length + ' mails trouvés. Ne ferme pas l\'appli.</p>');
+    await importObject(j);
+    busy = false; closeModal(); renderMain(); toast(data.mails.length + ' mails restaurés ✓');
+  }catch(e){
+    busy = false;
+    openModal('<h3>Aucune sauvegarde trouvée</h3><p>' + (e && e.code === 'none' ? 'Il n\'y a pas encore de sauvegarde dans ton Gmail.' : 'Impossible de lire la sauvegarde. Vérifie ta connexion et réessaie.') + '</p><div class="btns"><button onclick="closeModal()">Fermer</button></div>');
+  }
+}
+function confirmRestoreGmail(){
+  if(data && data.mails.length){
+    openModal(`<h3>Restaurer depuis Gmail ?</h3><p>Les ${data.mails.length} mails actuellement dans l'appli seront remplacés par ceux de la dernière sauvegarde.</p>
+      <div class="btns"><button onclick="closeModal()">Annuler</button><button class="big" onclick="restoreFromGmail()">Restaurer</button></div>`);
+  } else restoreFromGmail();
 }
 
 if('serviceWorker' in navigator && location.protocol.indexOf('http') === 0){
