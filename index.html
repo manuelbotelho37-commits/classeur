@@ -608,7 +608,9 @@ function renderMain(){
   renderTop(); renderBody();
 }
 function renderTop(){
-  const el = $('#topchips'); if(!el) return;
+  const el = $('#topchips'); if(!el || !data) return;
+  const typing = document.activeElement && document.activeElement.id === 'q';
+  setTimeout(()=>{ if(typing){ const q = $('#q'); if(q && document.activeElement !== q){ q.focus(); try{ q.setSelectionRange(q.value.length, q.value.length); }catch(e){} } } }, 0);
   const counts = {}; data.mails.forEach(m=>{ counts[m._top] = (counts[m._top]||0) + 1; });
   const inboxLabel = '📥 À classer' + (inboxLoaded ? ' (' + inboxRows.length + (inboxNext?'+':'') + ')' : '');
   const chips = [`<button class="chip ${view.tab==='inbox'?'on':''}" onclick="setTab('inbox')">${inboxLabel}</button>`]
@@ -620,7 +622,10 @@ function renderTop(){
     subs = '<div class="chips">'+childTabs(view.tab).map(c=>`<button class="chip sub ${view.sub===c.id?'on':''}" onclick="setSub('${c.id}')">${esc(c.name)} (${own[c.id]||0})</button>`).join('')+'</div>';
   }
   const search = `<div style="margin-top:12px"><input class="txt" id="q" type="search" placeholder="Rechercher dans tous les mails rangés…" value="${esc(view.q)}"></div>`;
-  el.innerHTML = search + `<div class="chips">${chips}</div>${subs}`;
+  const bk = bkRunning ? '<div class="seg"><button disabled>☁ Sauvegarde en cours…</button></div>'
+    : (bkNeeded && !(gToken && Date.now() < gTokenExp) ? '<div class="seg"><button class="big" style="padding:8px 14px;font-size:.88rem" onclick="backupNow()">☁ Sauvegarder maintenant</button></div>' : '');
+  el.innerHTML = search + bk + `<div class="chips">${chips}</div>${subs}`;
+  bkCheckNeeded().then(n=>{ if(n !== (el.dataset.bk === '1')){ el.dataset.bk = n ? '1' : '0'; renderTop(); } });
   const q = $('#q'); if(q) q.addEventListener('input', e=>{ view.q = e.target.value; renderBody(); });
 }
 function renderBody(){
@@ -851,14 +856,30 @@ function scheduleAutoBackup(){
 }
 async function runPendingBackup(){
   if(bkRunning || !key || !data || dataBroken) return;
-  if(!(await mget('bkPending'))) return;
-  if(!gToken || Date.now() > gTokenExp || !navigator.onLine) return;   /* refait au prochain branchement à Gmail */
-  bkRunning = true;
+  const pending = await mget('bkPending');
+  const last = (await mget('bkLast')) || 0;
+  const daily = data.mails.length && (Date.now() - last > 864e5);   /* au moins une sauvegarde par jour */
+  if(!pending && !daily) return;
+  if(!gToken || Date.now() > gTokenExp || !navigator.onLine){ renderTop(); return; }   /* refait au prochain branchement à Gmail */
+  bkRunning = true; renderTop();
   try{
     await backupToGmail();
     await mset('bkPending', false); await mset('bkLast', Date.now());
   }catch(e){}
-  bkRunning = false;
+  bkRunning = false; renderTop();
+}
+let bkNeeded = false;
+async function bkCheckNeeded(){
+  try{
+    const last = (await mget('bkLast')) || 0;
+    bkNeeded = !!(await mget('bkPending')) || (data && data.mails.length && Date.now() - last > 864e5);
+  }catch(e){ bkNeeded = false; }
+  return bkNeeded;
+}
+async function backupNow(){
+  if(!gToken || Date.now() > gTokenExp){ if(!(await gConnect())) return; }
+  await mset('bkPending', true); await runPendingBackup();
+  toast((await mget('bkPending')) ? 'Sauvegarde impossible, réessaie' : 'Sauvegardé dans Gmail ✓');
 }
 function b64Lines(s){ return s.replace(/.{1,76}/g, '$&\r\n'); }
 function utf8B64(s){ return bytesToB64(enc.encode(s)); }
