@@ -761,7 +761,7 @@ async function showSettings(){
   const n = data ? data.mails.length : 0;
   const when = data && data.importedAt ? new Date(data.importedAt).toLocaleDateString('fr-FR') : '';
   let bkLast = 0, bkPend = false; try{ bkLast = (await mget('bkLast')) || 0; bkPend = !!(await mget('bkPending')); }catch(e){}
-  const bkTxt = bkLast ? 'Dernière : ' + new Date(bkLast).toLocaleString('fr-FR', {day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit'}) + (bkPend ? ' · une nouvelle est en attente de connexion à Gmail.' : ' ✓') : (bkPend ? 'En attente : elle se fera dès que Gmail sera connecté.' : 'Pas encore faite.');
+  const bkTxt = bkLast ? 'Dernière : ' + new Date(bkLast).toLocaleString('fr-FR', {day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit'}) + (bkPend ? (gToken ? ' · la suivante part dans quelques secondes.' : ' · la suivante se fera dès que Gmail sera connecté.') : ' ✓') : (bkPend ? 'En attente : elle se fera dès que Gmail sera connecté.' : 'Pas encore faite.');
   openModal(`<h3>Réglages</h3>
     <div class="row"><div><b>Sauvegarde automatique dans Gmail</b><small>Après chaque changement, tout est copié dans ton Gmail (libellé « ${BK_LABEL} »). ${esc(bkTxt)}</small></div></div>
     <div class="row"><div><b>Restaurer depuis Gmail</b><small>Remet les onglets et les mails de la dernière sauvegarde automatique.</small></div><button onclick="confirmRestoreGmail()">Restaurer</button></div>
