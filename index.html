@@ -424,6 +424,7 @@ function inboxHtml(){
     return seg + `<div class="conn"><p>${off ? 'Pas d\'internet : la boîte de réception n\'est pas accessible. Tes mails déjà rangés restent lisibles.' : (inboxError === 'auth' ? 'La connexion à Gmail a expiré.' : 'Connecte-toi à Gmail pour voir les mails à classer.')}</p>
       ${off ? '' : '<button class="big" onclick="connectAndLoad()">Se connecter à Gmail</button>'}</div>`;
   }
+  if(!inboxLoaded && !inboxLoading && !inboxError){ setTimeout(()=>{ if(!inboxLoaded && !inboxLoading) loadInbox(false); }, 0); return seg + '<div class="empty">Chargement de ta boîte…</div>'; }
   if(inboxLoading && !inboxRows.length) return seg + '<div class="empty">Chargement de ta boîte…</div>';
   if(inboxError && !inboxRows.length) return seg + '<div class="empty">Impossible de charger ta boîte.<br><br><button onclick="refreshInbox()">Réessayer</button></div>';
   if(!inboxRows.length) return seg + '<div class="empty">Rien à classer : ta boîte est à zéro. 🎉</div>';
@@ -976,7 +977,7 @@ if('serviceWorker' in navigator && location.protocol.indexOf('http') === 0){
   window.addEventListener('load', ()=>{ navigator.serviceWorker.register('sw.js').catch(()=>{}); });
 }
 // Mise à jour immédiate : compare avec la version en ligne (l'URL unique contourne les caches)
-const BUILD = '2026-11-08-a';
+const BUILD = '2026-11-08-b';
 async function checkUpdate(){
   try{
     if(location.protocol.indexOf('http') !== 0) return;
