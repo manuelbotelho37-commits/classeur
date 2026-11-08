@@ -975,6 +975,21 @@ function confirmRestoreGmail(){
 if('serviceWorker' in navigator && location.protocol.indexOf('http') === 0){
   window.addEventListener('load', ()=>{ navigator.serviceWorker.register('sw.js').catch(()=>{}); });
 }
+// Mise à jour immédiate : compare avec la version en ligne (l'URL unique contourne les caches)
+const BUILD = '2026-11-08-a';
+async function checkUpdate(){
+  try{
+    if(location.protocol.indexOf('http') !== 0) return;
+    const t = await (await fetch('index.html?u=' + Date.now(), {cache:'no-store'})).text();
+    const m = t.match(/const BUILD = '([^']+)'/);
+    if(m && m[1] !== BUILD && sessionStorage.getItem('cl_upd') !== m[1]){
+      sessionStorage.setItem('cl_upd', m[1]);
+      location.replace(location.pathname + '?u=' + Date.now());
+    }
+  }catch(e){}
+}
+document.addEventListener('visibilitychange', ()=>{ if(document.visibilityState === 'visible') checkUpdate(); });
+setTimeout(checkUpdate, 1500);
 boot();
 </script>
 </body>
