@@ -317,8 +317,27 @@ async function gLoadToken(){
     if(o && o.t && o.e > Date.now() + 120000){ gToken = o.t; gTokenExp = o.e; } else await mdel('gtok');
   }catch(e){}
 }
+/* Dans l'appli Android : Google interdit la connexion dans l'appli, elle se fait dans Chrome qui renvoie l'autorisation */
+function gConnectAndroid(hint){
+  return new Promise((res,rej)=>{
+    const take = (t,e)=>{ window.__gTok = null; window.__pendingTok = null; gToken = t; gTokenExp = Date.now() + ((+e||3600) - 60)*1000; res(); };
+    const p = window.__pendingTok;
+    if(p && p[0] && Date.now() - (p[2]||0) < 50*60000){ take(p[0], (+p[1]||3600) - Math.round((Date.now()-(p[2]||0))/1000)); return; }
+    window.__gTok = take;
+    const back = AndroidAuth.scheme();
+    AndroidAuth.start(location.origin + location.pathname.replace(/[^/]*$/, '') + 'auth.html?back=' + encodeURIComponent(back) + (hint ? '&hint=' + encodeURIComponent(hint) : ''));
+    setTimeout(()=>{ if(window.__gTok === take){ window.__gTok = null; rej(new Error('timeout')); } }, 15*60000);
+  });
+}
 async function gConnect(){
   try{
+    if(window.AndroidAuth){
+      await gConnectAndroid((await mget('ghint')) || '');
+      gSaveToken();
+      if(!(await mget('ghint'))){ try{ const pr = await gapi('profile'); if(pr && pr.emailAddress) await mset('ghint', pr.emailAddress); }catch(e){} }
+      runPendingBackup();
+      return true;
+    }
     await loadGsi();
     const hint = (await mget('ghint')) || undefined;
     await new Promise((res,rej)=>{

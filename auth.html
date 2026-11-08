@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Connexion Gmail – Classeur</title>
+<meta name="theme-color" content="#13110f">
+<style>
+  :root{ color-scheme:dark; }
+  body{ margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; background:#13110f; color:#f3ead8; font:17px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; padding:0 16px; box-sizing:border-box; }
+  .box{ max-width:420px; width:100%; text-align:center; }
+  h1{ font-family:Georgia,serif; font-size:1.6rem; margin:0 0 10px; }
+  p{ color:#b9ad97; margin:0 0 22px; }
+  .btn{ display:block; width:100%; box-sizing:border-box; border:0; border-radius:16px; padding:18px; font-size:1.1rem; font-weight:700; background:#c9a24e; color:#1a1408; text-decoration:none; cursor:pointer; }
+  .err{ color:#f08a7e; margin-top:16px; }
+</style>
+</head>
+<body>
+<div class="box" id="box">
+  <h1>📧 Connexion à Gmail</h1>
+  <p>Pour l'appli Classeur. Touche le bouton, choisis ton compte, puis reviens au Classeur.</p>
+  <button class="btn" id="go">Se connecter à Gmail</button>
+  <div class="err" id="err"></div>
+</div>
+<script src="https://accounts.google.com/gsi/client" async></script>
+<script>
+const CLIENT_ID = '852424342660-6p4d95ml0vf46f3dtmuqpol15nsrcg5h.apps.googleusercontent.com';
+const SCOPE = 'https://www.googleapis.com/auth/gmail.modify';
+const q = new URLSearchParams(location.search);
+const back = (q.get('back') || '').replace(/[^a-z]/g, '');
+const hint = q.get('hint') || undefined;
+const $ = id => document.getElementById(id);
+$('go').onclick = () => {
+  $('err').textContent = '';
+  if(!(window.google && google.accounts && google.accounts.oauth2)){ $('err').textContent = 'Chargement… réessaie dans 2 secondes.'; return; }
+  const client = google.accounts.oauth2.initTokenClient({
+    client_id: CLIENT_ID, scope: SCOPE, hint,
+    callback: r => {
+      if(!(r && r.access_token)){ $('err').textContent = 'Connexion refusée. Réessaie.'; return; }
+      const url = back + '://auth?t=' + encodeURIComponent(r.access_token) + '&e=' + (+r.expires_in || 3600);
+      $('box').innerHTML = '<h1>✓ Connecté</h1><p>Touche le bouton pour revenir au Classeur.</p><a class="btn" id="back">Revenir au Classeur</a>';
+      $('back').href = url;
+      try{ location.href = url; }catch(e){}
+    },
+    error_callback: () => { $('err').textContent = 'La fenêtre Google s\'est fermée. Réessaie.'; }
+  });
+  client.requestAccessToken({prompt: ''});
+};
+</script>
+</body>
+</html>
