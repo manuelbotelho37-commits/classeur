@@ -161,6 +161,10 @@ const decBytes = (k, r) => crypto.subtle.decrypt({name:'AES-GCM', iv:r.iv}, k, r
 
 /* ---------- état ---------- */
 let key = null, data = null, keepExp = 0, idleT = null;
+// Choix de Manu : pas de code par défaut. Le code n'est demandé que s'il l'a remis (Réglages > Ajouter un code).
+const askCode = () => { try{ return localStorage.getItem('classeur_ask_code') === '1'; }catch(e){ return false; } };
+const FOREVER = () => Date.now() + 100*365*864e5;
+async function keepForever(){ try{ const raw = await crypto.subtle.exportKey('raw', key); keepExp = FOREVER(); await mset('keep', {raw, exp:keepExp}); }catch(e){} }
 let view = {tab:null, sub:null, q:'', open:null, inboxOpen:null};
 function defaultTab(){ const t = data && topTabs()[0]; return t ? t.id : 'inbox'; }
 let urls = [];
@@ -174,7 +178,7 @@ function closeModal(){ $('#modal').innerHTML = ''; }
 function openModal(html){ $('#modal').innerHTML = '<div class="overlay" onclick="if(event.target===this)closeModal()"><div class="sheet">'+html+'</div></div>'; }
 function resetIdle(){
   clearTimeout(idleT);
-  if(!key || keepExp > Date.now()) return;
+  if(!key || keepExp > Date.now() || !askCode()) return;
   idleT = setTimeout(()=>{ if(key && !(keepExp > Date.now()) && !busy) lockNow(); }, 5*60*1000);
 }
 ['click','touchstart','keydown'].forEach(e=>document.addEventListener(e, resetIdle, {passive:true}));
@@ -213,7 +217,7 @@ async function saveData(){
 /* ---------- écrans code ---------- */
 function renderSetup(msg){
   $('#app').innerHTML = `<div class="center"><img class="logo" src="icon-192.png" alt="">
-    <h2>Classeur de mails</h2><p>Choisis un code à 6 chiffres. Il protège tes mails dans ce téléphone et sera demandé à chaque ouverture.</p>
+    <h2>Classeur de mails</h2><p>Choisis un code à 6 chiffres. Il protège tes mails dans ce téléphone. Ensuite, l'appli s'ouvre sans code (tu pourras en remettre un dans les réglages).</p>
     <input class="txt" id="c1" type="password" inputmode="numeric" maxlength="6" autocomplete="off" placeholder="······">
     <input class="txt" id="c2" type="password" inputmode="numeric" maxlength="6" autocomplete="off" placeholder="······">
     <div class="err" id="err">${esc(msg||'')}</div>
@@ -260,6 +264,7 @@ async function tryUnlock(code){
   resetIdle(); renderMain();
 }
 async function lockNow(){
+  if(!askCode()) return;
   key = null; data = null; keepExp = 0; gToken = null; inboxRows = []; inboxLoaded = false; inboxSel.clear();
   await mdel('keep'); await mdel('gtok');
   view = {tab:null, sub:null, q:'', open:null, inboxOpen:null}; closeModal(); renderLock('');
@@ -616,9 +621,10 @@ async function doDelTab(id){
 function topBar(left, title){
   return `<div class="top">${left}<h1>${title}</h1>
     <button class="sq" onclick="showSettings()" aria-label="Réglages">⚙</button>
-    <button class="sq" onclick="lockNow()" aria-label="Verrouiller">🔒</button></div>`;
+    ${askCode() ? '<button class="sq" onclick="lockNow()" aria-label="Verrouiller">🔒</button>' : ''}</div>`;
 }
 function renderMain(){
+  if(key && !askCode() && !(keepExp - Date.now() > 400*864e5)){ keepExp = FOREVER(); keepForever(); }
   revokeUrls();
   if(!view.tab || (view.tab !== 'inbox' && !tabMap[view.tab])) view.tab = defaultTab();
   if(view.inboxOpen) return renderInboxDetail();
@@ -789,8 +795,8 @@ async function showSettings(){
   openModal(`<h3>Réglages</h3>
     <div class="row"><div><b>Sauvegarde automatique dans Gmail</b><small>Après chaque changement, tout est copié dans ton Gmail (libellé « ${BK_LABEL} »). ${esc(bkTxt)}</small></div></div>
     <div class="row"><div><b>Restaurer depuis Gmail</b><small>Remet les onglets et les mails de la dernière sauvegarde automatique.</small></div><button onclick="confirmRestoreGmail()">Restaurer</button></div>
-    <div class="row"><div><b>Rester déverrouillé 24 h</b><small>${keepExp > Date.now() ? 'Actif jusqu\'à '+esc(fmtExp(keepExp))+'. Le code n\'est pas demandé : quiconque a ton téléphone peut ouvrir l\'appli.' : 'Le code est demandé à chaque ouverture.'}</small></div>
-      <button class="sw ${keepExp > Date.now() ? 'on' : ''}" onclick="toggleKeep()" aria-label="Rester déverrouillé 24 h"></button></div>
+    <div class="row"><div><b>Code à l'ouverture</b><small>${askCode() ? 'Le code est demandé à chaque ouverture.' : 'Pas de code : l\'appli s\'ouvre directement. Quiconque a ton téléphone peut l\'ouvrir.'}</small></div>
+      <button onclick="toggleAskCode()">${askCode() ? 'Ne plus demander' : 'Ajouter un code'}</button></div>
     <div class="row"><div><b>Gmail</b><small>${gToken ? 'Connecté.' : 'Non connecté (connexion à chaque ouverture).'}</small></div>
       ${gToken ? '<button onclick="gDisconnect()">Déconnecter</button>' : '<button onclick="closeModal(); setTab(\'inbox\'); connectAndLoad();">Connecter</button>'}</div>
     <div class="row"><div><b>Mes onglets</b><small>Créer, renommer, colorer, supprimer.</small></div><button onclick="showTabs()">Gérer</button></div>
@@ -803,6 +809,11 @@ function gDisconnect(){
   const t = gToken; mdel('gtok'); gToken = null; inboxRows = []; inboxLoaded = false; inboxSel.clear();
   try{ if(t && gsiReady()) google.accounts.oauth2.revoke(t, ()=>{}); }catch(e){}
   closeModal(); renderTop(); renderBody(); toast('Déconnecté de Gmail');
+}
+async function toggleAskCode(){
+  if(askCode()){ try{ localStorage.removeItem('classeur_ask_code'); }catch(e){} await keepForever(); toast('Plus de code demandé'); }
+  else { try{ localStorage.setItem('classeur_ask_code','1'); }catch(e){} await mdel('keep'); keepExp = 0; resetIdle(); toast('Le code sera demandé à chaque ouverture'); }
+  closeModal(); renderTop(); showSettings();
 }
 async function toggleKeep(){
   if(keepExp > Date.now()){ await mdel('keep'); keepExp = 0; toast('Le code sera redemandé'); }
