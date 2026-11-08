@@ -166,7 +166,7 @@ const askCode = () => { try{ return localStorage.getItem('classeur_ask_code') ==
 const FOREVER = () => Date.now() + 100*365*864e5;
 async function keepForever(){ try{ const raw = await crypto.subtle.exportKey('raw', key); keepExp = FOREVER(); await mset('keep', {raw, exp:keepExp}); }catch(e){} }
 let view = {tab:null, sub:null, q:'', open:null, inboxOpen:null};
-function defaultTab(){ const t = data && topTabs()[0]; return t ? t.id : 'inbox'; }
+function defaultTab(){ return 'inbox'; }
 let urls = [];
 let tabMap = {}, kids = {}, topOf = {};
 
@@ -572,9 +572,9 @@ async function doTrash(){
 
 /* ---------- onglets ---------- */
 let tabForm = null;
-function openTabForm(id, parentId, returnToPick){
+function openTabForm(id, parentId, returnToPick, fromMain){
   const t = id ? tabMap[id] : null;
-  tabForm = {id, color: (t && t.color) || PALETTE[(data.tabs.length) % PALETTE.length], parentId: t ? (t.parentId||'') : (parentId||''), returnToPick:!!returnToPick};
+  tabForm = {id, color: (t && t.color) || PALETTE[(data.tabs.length) % PALETTE.length], parentId: t ? (t.parentId||'') : (parentId||''), returnToPick:!!returnToPick, fromMain:!!fromMain};
   const opts = '<option value="">Aucun (onglet principal)</option>' + topTabs().filter(x=>x.id !== id).map(x=>`<option value="${x.id}" ${tabForm.parentId===x.id?'selected':''}>${esc(x.name)}</option>`).join('');
   openModal(`<h3>${id ? 'Modifier l\'onglet' : 'Nouvel onglet'}</h3>
     <input class="txt" id="tfName" placeholder="Nom de l'onglet" maxlength="30" value="${esc(t ? t.name : '')}" oninput="this.value=this.value.toUpperCase()">
@@ -587,7 +587,7 @@ function openTabForm(id, parentId, returnToPick){
 }
 function pickColor(c){ tabForm.color = c; document.querySelectorAll('.swatch').forEach(b=>b.classList.toggle('on', b.style.background.replace(/\s/g,'') === hexToRgb(c))); }
 function hexToRgb(h){ const n = parseInt(h.slice(1),16); return 'rgb('+(n>>16)+','+((n>>8)&255)+','+(n&255)+')'; }
-function closeTabForm(){ if(tabForm && tabForm.returnToPick) pickTabFor(pendingIds); else showTabs(); }
+function closeTabForm(){ if(tabForm && tabForm.fromMain){ tabForm = null; closeModal(); return; } if(tabForm && tabForm.returnToPick) pickTabFor(pendingIds); else showTabs(); }
 async function saveTabForm(){
   const name = ($('#tfName').value || '').trim().toUpperCase();
   if(!name){ toast('Écris un nom'); return; }
@@ -595,8 +595,8 @@ async function saveTabForm(){
   if(tabForm.id){ const t = tabMap[tabForm.id]; t.name = name; t.color = tabForm.color; if(!kids[t.id]){ if(parentId) t.parentId = parentId; else delete t.parentId; } }
   else { const t = {id:'t' + Date.now().toString(36) + Math.floor(Math.random()*1000).toString(36), name, color:tabForm.color}; if(parentId) t.parentId = parentId; data.tabs.push(t); }
   prepare(); await saveData();
-  const back = tabForm.returnToPick; tabForm = null;
-  if(back) pickTabFor(pendingIds); else { showTabs(); }
+  const back = tabForm.returnToPick, main = tabForm.fromMain; tabForm = null;
+  if(main){ closeModal(); toast('Onglet créé'); } else if(back) pickTabFor(pendingIds); else { showTabs(); }
   renderTop(); renderBody();
 }
 function showTabs(){
@@ -638,7 +638,7 @@ function renderTop(){
   setTimeout(()=>{ if(typing){ const q = $('#q'); if(q && document.activeElement !== q){ q.focus(); try{ q.setSelectionRange(q.value.length, q.value.length); }catch(e){} } } }, 0);
   const counts = {}; data.mails.forEach(m=>{ counts[m._top] = (counts[m._top]||0) + 1; });
   const inboxLabel = '📥 À classer' + (inboxLoaded ? ' (' + inboxRows.length + (inboxNext?'+':'') + ')' : '');
-  const chips = [`<button class="chip ${view.tab==='inbox'?'on':''}" onclick="setTab('inbox')">${inboxLabel}</button>`]
+  const chips = [`<button class="chip ${view.tab==='inbox'?'on':''}" onclick="setTab('inbox')">${inboxLabel}</button>`, `<button class="chip" style="border-style:dashed" onclick="openTabForm(null,null,false,true)">+ Onglet</button>`]
     .concat(topTabs().map(t=>`<button class="chip ${view.tab===t.id?'on':''}" onclick="setTab('${t.id}')"><span class="dot" style="background:${esc(t.color||'#999')}"></span>${esc(t.name)} (${counts[t.id]||0})</button>`)).join('')
     + '<button class="chip" onclick="showTabs()" aria-label="Gérer les onglets">⋯</button>';
   let subs = '';
