@@ -976,50 +976,92 @@ async function backupNow(){
 }
 function b64Lines(s){ return s.replace(/.{1,76}/g, '$&\r\n'); }
 function utf8B64(s){ return bytesToB64(enc.encode(s)); }
+/* Sauvegarde TOUJOURS complète (mails + pièces jointes) : si elle est trop grosse pour un seul mail,
+   elle est découpée en plusieurs mails « partie 1/3, 2/3, 3/3 » qui sont recollés à la restauration. */
+const BK_PART = 15 * 1024 * 1024;
+function bkInfo(subject){
+  const s = String(subject||''); const set = s.match(/#s(\d+)/); const pt = s.match(/partie (\d+)\/(\d+)/);
+  return {set: set ? set[1] : null, i: pt ? +pt[1] : 1, n: pt ? +pt[2] : 1};
+}
+async function bkList(lid){   /* sauvegardes du libellé, regroupées par lot, la plus récente en premier */
+  const l = await gapi('messages?maxResults=100&labelIds=' + encodeURIComponent(lid));
+  const sets = [], byId = {};
+  sets.failed = false;
+  for(const m of ((l && l.messages) || [])){
+    let subj = '';
+    try{ const h = await gapi('messages/' + m.id + '?format=metadata&metadataHeaders=Subject'); subj = hdr(h, 'Subject'); }catch(e){ if(e && e.code === 'auth') throw e; sets.failed = true; continue; }
+    const k = bkInfo(subj); const sid = k.set || ('old' + m.id);
+    if(!byId[sid]){ byId[sid] = {id:sid, n:k.n, parts:{}}; sets.push(byId[sid]); }
+    byId[sid].parts[k.i] = m.id;
+  }
+  sets.forEach(s=>{ s.complete = Object.keys(s.parts).length >= s.n; });
+  return sets;
+}
 async function backupToGmail(){
-  let obj = await buildBackup(true);
-  let json = JSON.stringify(obj);
-  if(json.length * 1.37 > BK_MAX){ obj = await buildBackup(false); json = JSON.stringify(obj); }
+  const obj = await buildBackup(true);
+  const bytes = enc.encode(JSON.stringify(obj));
+  const n = Math.max(1, Math.ceil(bytes.length / BK_PART));
   const d = new Date(), stamp = d.toLocaleString('fr-FR', {timeZone:'Europe/Paris'});
+  const setId = String(Date.now());
   const me = (await mget('ghint')) || '';
-  const bd = 'classeur' + Date.now();
-  const fname = 'classeur-sauvegarde-' + d.getFullYear() + String(d.getMonth()+1).padStart(2,'0') + String(d.getDate()).padStart(2,'0') + '.json';
-  const subject = 'NE PAS SUPPRIMER - Sauvegarde Classeur de mails (' + stamp + ')';
-  const mime = (me ? 'From: ' + me + '\r\nTo: ' + me + '\r\n' : '') +
-    'Subject: =?UTF-8?B?' + utf8B64(subject) + '?=\r\nDate: ' + d.toUTCString() + '\r\nMIME-Version: 1.0\r\n' +
-    'Content-Type: multipart/mixed; boundary="' + bd + '"\r\n\r\n' +
-    '--' + bd + '\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n' +
-    b64Lines(utf8B64('Sauvegarde automatique de ton Classeur de mails : ' + obj.tabs.length + ' onglets, ' + obj.mails.length + ' mails.\nNe supprime pas ce message : il sert à tout récupérer si l\'appli est effacée.')) +
-    '--' + bd + '\r\nContent-Type: application/json; name="' + fname + '"\r\nContent-Disposition: attachment; filename="' + fname + '"\r\nContent-Transfer-Encoding: base64\r\n\r\n' +
-    b64Lines(utf8B64(json)) + '--' + bd + '--\r\n';
+  const day = d.getFullYear() + String(d.getMonth()+1).padStart(2,'0') + String(d.getDate()).padStart(2,'0');
   const lid = await ensureLabel(BK_LABEL);
-  if(!gToken) throw {code:'auth'};
-  const r = await fetch('https://gmail.googleapis.com/upload/gmail/v1/users/me/messages?uploadType=media&internalDateSource=dateHeader', {method:'POST', headers:{Authorization:'Bearer ' + gToken, 'Content-Type':'message/rfc822'}, body:mime});
-  if(!r.ok) throw {code:'http', status:r.status};
-  const ins = await r.json();
-  await gapi('messages/' + ins.id + '/modify', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({addLabelIds:[lid], removeLabelIds:['INBOX','UNREAD']})});
-  /* on garde les 5 dernières sauvegardes, les plus anciennes vont à la corbeille */
+  for(let i = 1; i <= n; i++){
+    const chunk = bytes.subarray((i-1) * BK_PART, i * BK_PART);
+    const bd = 'classeur' + setId + 'p' + i;
+    const fname = 'classeur-sauvegarde-' + day + (n > 1 ? '-partie' + i + 'sur' + n : '') + '.json';
+    const subject = 'NE PAS SUPPRIMER - Sauvegarde Classeur de mails (' + stamp + ')' + (n > 1 ? ' - partie ' + i + '/' + n : '') + ' #s' + setId;
+    const txt = 'Sauvegarde automatique de ton Classeur de mails : ' + obj.tabs.length + ' onglets, ' + obj.mails.length + ' mails, ' + obj.files.length + ' pièces jointes.' +
+      (n > 1 ? '\nCette sauvegarde est en ' + n + ' parties (ici la partie ' + i + ').' : '') + '\nNe supprime pas ce message : il sert à tout récupérer si l\'appli est effacée.';
+    const mime = (me ? 'From: ' + me + '\r\nTo: ' + me + '\r\n' : '') +
+      'Subject: =?UTF-8?B?' + utf8B64(subject) + '?=\r\nDate: ' + new Date(d.getTime() + i * 1000).toUTCString() + '\r\nMIME-Version: 1.0\r\n' +
+      'Content-Type: multipart/mixed; boundary="' + bd + '"\r\n\r\n' +
+      '--' + bd + '\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n' + b64Lines(utf8B64(txt)) +
+      '--' + bd + '\r\nContent-Type: application/json; name="' + fname + '"\r\nContent-Disposition: attachment; filename="' + fname + '"\r\nContent-Transfer-Encoding: base64\r\n\r\n' +
+      b64Lines(bytesToB64(chunk)) + '--' + bd + '--\r\n';
+    if(!gToken) throw {code:'auth'};
+    const r = await fetch('https://gmail.googleapis.com/upload/gmail/v1/users/me/messages?uploadType=media&internalDateSource=dateHeader', {method:'POST', headers:{Authorization:'Bearer ' + gToken, 'Content-Type':'message/rfc822'}, body:mime});
+    if(!r.ok) throw {code:'http', status:r.status};
+    const ins = await r.json();
+    await gapi('messages/' + ins.id + '/modify', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({addLabelIds:[lid], removeLabelIds:['INBOX','UNREAD']})});
+  }
+  /* on garde les 5 dernières sauvegardes complètes ; les plus anciennes (et les morceaux incomplets) vont à la corbeille */
   try{
-    const l = await gapi('messages?maxResults=50&labelIds=' + encodeURIComponent(lid));
-    const old = ((l && l.messages) || []).slice(5);
-    for(const m of old){ try{ await gapi('messages/' + m.id + '/trash', {method:'POST'}); }catch(e){} }
+    const sets = await bkList(lid);
+    if(sets.failed) return;   /* lecture incomplète : on ne jette rien, par prudence */
+    let kept = 0;
+    for(const s of sets){
+      if(s.id === setId || (s.complete && kept < 5)){ if(s.complete) kept++; continue; }
+      for(const k in s.parts){ try{ await gapi('messages/' + s.parts[k] + '/trash', {method:'POST'}); }catch(e){} }
+    }
   }catch(e){}
+}
+async function bkReadPart(id){
+  const msg = await gapi('messages/' + id + '?format=full');
+  const p = parseMessage(msg);
+  const a = p.atts.find(x=>/json/.test(x.contentType) || /\.json$/i.test(x.filename||''));
+  if(!a) throw {code:'none'};
+  let b64u = a.data;
+  if(!b64u && a.attachmentId){ const r = await gapi('messages/' + id + '/attachments/' + a.attachmentId); b64u = r && r.data; }
+  return b64urlToBytes(b64u);
+}
+async function bkReadSet(s){
+  const chunks = []; let len = 0;
+  for(let i = 1; i <= s.n; i++){ const b = await bkReadPart(s.parts[i]); chunks.push(b); len += b.length; }
+  const all = new Uint8Array(len); let o = 0;
+  for(const c of chunks){ all.set(c, o); o += c.length; }
+  return JSON.parse(dec.decode(all));
 }
 async function restoreFromGmail(){
   if(!gToken || Date.now() > gTokenExp){ if(!(await gConnect())) return; }
   busy = true; openModal('<h3>Recherche de la sauvegarde…</h3><p>Ne ferme pas l\'appli.</p>');
   try{
     const lid = await ensureLabel(BK_LABEL);
-    const l = await gapi('messages?maxResults=1&labelIds=' + encodeURIComponent(lid));
-    const first = l && l.messages && l.messages[0];
-    if(!first) throw {code:'none'};
-    const msg = await gapi('messages/' + first.id + '?format=full');
-    const p = parseMessage(msg);
-    const a = p.atts.find(x=>/json/.test(x.contentType) || /\.json$/i.test(x.filename||''));
-    if(!a) throw {code:'none'};
-    let b64u = a.data;
-    if(!b64u && a.attachmentId){ const r = await gapi('messages/' + first.id + '/attachments/' + a.attachmentId); b64u = r && r.data; }
-    const j = JSON.parse(dec.decode(b64urlToBytes(b64u)));
+    const sets = (await bkList(lid)).filter(s=>s.complete);
+    if(!sets.length) throw {code:'none'};
+    let j = null;
+    for(const s of sets){ try{ j = await bkReadSet(s); if(j && Array.isArray(j.mails)) break; }catch(e){ if(e && e.code === 'auth') throw e; } j = null; }
+    if(!j) throw {code:'read'};
     openModal('<h3>Restauration…</h3><p>' + j.mails.length + ' mails trouvés. Ne ferme pas l\'appli.</p>');
     await importObject(j);
     busy = false; closeModal(); renderMain(); toast(data.mails.length + ' mails restaurés ✓');
@@ -1039,7 +1081,7 @@ if('serviceWorker' in navigator && location.protocol.indexOf('http') === 0){
   window.addEventListener('load', ()=>{ navigator.serviceWorker.register('sw.js').catch(()=>{}); });
 }
 // Mise à jour immédiate : compare avec la version en ligne (l'URL unique contourne les caches)
-const BUILD = '2026-11-08-b';
+const BUILD = '2026-11-09-a';
 async function checkUpdate(){
   try{
     if(location.protocol.indexOf('http') !== 0) return;

@@ -1,4 +1,4 @@
-const CACHE = 'classeur-v9';
+const CACHE = 'classeur-v10';
 const CORE = ['./', 'index.html', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png',
   'pdfjs/pdf.min.mjs', 'pdfjs/pdf.worker.min.mjs',
   'pdfjs/wasm/jbig2.wasm', 'pdfjs/wasm/openjpeg.wasm', 'pdfjs/wasm/qcms_bg.wasm',
