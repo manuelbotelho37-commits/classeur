@@ -3,14 +3,15 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#12110d">
+<meta name="theme-color" content="#0c0c0e">
 <title>Classeur de mails</title>
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" type="image/png" href="icon-192.png">
 <link rel="apple-touch-icon" href="icon-192.png">
+<link rel="stylesheet" href="fonts/fonts.css">
 <style>
   :root{
-    --bg:#12110d; --s:#1c1a14; --s2:#25221a; --line:#3a3526; --text:#ece8dc; --dim:#9a9482;
+    --bg:#0c0c0e; --s:#1c1a14; --s2:#25221a; --line:#3a3526; --text:#ece8dc; --dim:#9a9482;
     --gold:#c89b3c; --gold2:#e3bd68; --green:#3ddc84; --red:#c4635a;
     box-sizing:border-box; padding-top:env(safe-area-inset-top,0px); padding-bottom:env(safe-area-inset-bottom,0px);
   }
@@ -24,7 +25,7 @@
   .wrap{max-width:720px; margin:0 auto; padding:0 16px 120px;}
   .top{display:flex; align-items:center; gap:12px; padding:16px 0 12px; position:sticky; top:env(safe-area-inset-top,0px); background:var(--bg); z-index:5; border-bottom:1px solid var(--line);}
   .logo{width:42px; height:42px; border-radius:11px; flex:none;}
-  .top h1{flex:1; margin:0; font-size:1.45rem; font-weight:600; font-family:Georgia,'Times New Roman',serif; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+  .top h1{flex:1; margin:0; font-size:1.45rem; font-weight:600; font-family:"Cormorant Garamond",Georgia,serif; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
   .sq{width:40px; height:40px; padding:0; display:flex; align-items:center; justify-content:center; font-size:1.1rem; flex:none;}
   .back{font-size:1.4rem; line-height:1; padding:6px 14px;}
   input.txt,select.txt{width:100%; padding:13px 14px; background:var(--s2); border:1px solid var(--line); border-radius:10px; font-size:1rem;}
@@ -44,7 +45,7 @@
   .big{background:var(--gold); color:#1b1405; border-color:var(--gold); font-weight:600; padding:14px 20px; font-size:1.05rem; border-radius:12px;}
   .danger{color:var(--red); border-color:#6b3a35;}
   .center{max-width:380px; margin:0 auto; padding:70px 22px 40px; text-align:center;}
-  .center h2{font-family:Georgia,serif; font-size:1.9rem; margin:14px 0 6px;}
+  .center h2{font-family:"Cormorant Garamond",Georgia,serif; font-size:1.9rem; margin:14px 0 6px;}
   .center p{color:var(--dim); line-height:1.5; margin:0 0 20px; font-size:.95rem;}
   .center .logo{width:84px; height:84px; border-radius:20px;}
   .center input{text-align:center; letter-spacing:.5em; font-size:1.5rem; margin-bottom:12px;}
@@ -64,7 +65,7 @@
   .mailbox pre{margin:0; padding:14px; white-space:pre-wrap; color:#222; font-family:inherit; word-break:break-word;}
   .overlay{position:fixed; inset:0; background:rgba(0,0,0,.6); display:flex; align-items:flex-end; justify-content:center; z-index:50;}
   .sheet{width:100%; max-width:520px; max-height:88vh; overflow-y:auto; background:var(--s); border-radius:20px 20px 0 0; padding:20px 18px calc(24px + env(safe-area-inset-bottom,0px)); border:1px solid var(--line);}
-  .sheet h3{margin:0 0 12px; font-family:Georgia,serif; font-size:1.3rem;}
+  .sheet h3{margin:0 0 12px; font-family:"Cormorant Garamond",Georgia,serif; font-size:1.3rem;}
   .sheet p{color:var(--dim); line-height:1.5; margin:0 0 6px;}
   .row{display:flex; align-items:center; justify-content:space-between; gap:14px; padding:12px 0; border-top:1px solid var(--line);}
   .row small{display:block; color:var(--dim); margin-top:4px; line-height:1.4;}
@@ -103,6 +104,24 @@
   .selbar button{flex:1; max-width:260px;}
   .conn{margin-top:16px; background:var(--s); border:1px solid var(--line); border-radius:14px; padding:20px 18px; text-align:center; line-height:1.6;}
   .conn p{color:var(--dim); margin:0 0 14px; font-size:.92rem;}
+
+/* Thème Métro Dodo : écriture dorée, or dégradé, noir chaud */
+:root{--bg:#0c0c0e;--surface:#17171a;--surface2:#1f1e1c;--line:#33302a;--text:#f3ead6;--dim:#a69c86;--brass:#d4a94e;--brass2:#e2c275;--brass-dim:#8f7331;
+--s:#17171a;--s2:#1f1e1c;--gold:#d4a94e;--gold2:#e2c275;--mdgold:linear-gradient(135deg,#f7e3a1 0%,#d4a94e 45%,#a87b2c 72%,#ecd08a 100%)}
+html,body{background:radial-gradient(120% 60% at 30% 0%,#26241f 0%,#0c0c0e 60%) fixed,#0c0c0e!important}
+html{font-size:106.25%}
+body{font-family:"Source Sans 3",system-ui,-apple-system,"Segoe UI",sans-serif}
+*{font-variant-numeric:lining-nums}
+h1,.titre-or{font-family:"Cormorant Garamond","DejaVu Serif",Georgia,serif!important;background:var(--mdgold);-webkit-background-clip:text;background-clip:text;color:transparent!important;font-weight:600!important;letter-spacing:.01em}
+h1 button,h1 span,h1 a{color:var(--text)}
+.top{position:relative!important;padding-bottom:14px!important;background:transparent!important;border-bottom:none!important}
+.top h1{text-align:center;font-size:2.1rem!important;font-weight:700!important;letter-spacing:.03em;line-height:1.15}
+.top::after{content:"";position:absolute;left:50%;bottom:0;width:140px;height:1px;transform:translateX(-50%);background:linear-gradient(90deg,transparent,#d4a94e,transparent)}
+.center h2{font-size:2.4rem!important;font-weight:700!important}
+.top h1:first-child{padding-left:56px}
+.chip.on,.big,.seg button.on{background:var(--mdgold)!important;color:#111113!important;border-color:transparent!important}
+.chip:not(.on),.seg button:not(.on){color:var(--brass2)}
+.center h2{font-family:"Cormorant Garamond",Georgia,serif;background:var(--mdgold);-webkit-background-clip:text;background-clip:text;color:transparent;font-weight:600}
 </style>
 </head>
 <body>

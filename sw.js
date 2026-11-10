@@ -1,5 +1,5 @@
-const CACHE = 'classeur-v10';
-const CORE = ['./', 'index.html', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png',
+const CACHE = 'classeur-v11';
+const CORE = ['./', 'index.html', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'fonts/fonts.css', 'fonts/CormorantGaramond-latin.woff2', 'fonts/SourceSans3-latin.woff2',
   'pdfjs/pdf.min.mjs', 'pdfjs/pdf.worker.min.mjs',
   'pdfjs/wasm/jbig2.wasm', 'pdfjs/wasm/openjpeg.wasm', 'pdfjs/wasm/qcms_bg.wasm',
   'pdfjs/wasm/jbig2_nowasm_fallback.js', 'pdfjs/wasm/openjpeg_nowasm_fallback.js'];
